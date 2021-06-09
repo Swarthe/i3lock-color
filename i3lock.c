@@ -85,6 +85,7 @@ char wrongcolor[9] = "000000ff";
 char layoutcolor[9] = "000000ff";
 char timecolor[9] = "000000ff";
 char datecolor[9] = "000000ff";
+char modifcolor[9] = "000000ff";
 char keyhlcolor[9] = "33db00ff";
 char bshlcolor[9] = "db3300ff";
 char separatorcolor[9] = "000000ff";
@@ -96,6 +97,7 @@ char layoutoutlinecolor[9] = "00000000";
 char timeoutlinecolor[9] = "00000000";
 char dateoutlinecolor[9] = "00000000";
 char greeteroutlinecolor[9] = "00000000";
+char modifoutlinecolor[9] = "00000000";
 
 /* int defining which display the lock indicator should be shown on. If -1, then show on all displays.*/
 int screen_number = 0;
@@ -241,14 +243,14 @@ static uint8_t xkb_base_error;
 static int randr_base = -1;
 
 cairo_surface_t *img = NULL;
-cairo_surface_t *blur_img = NULL;
 cairo_surface_t *img_slideshow[256];
+cairo_surface_t *blur_bg_img = NULL;
 int slideshow_image_count = 0;
 int slideshow_interval = 10;
 bool slideshow_random_selection = false;
 
-bool tile = false;
-bool centered = false;
+background_type_t bg_type = NONE;
+
 bool ignore_empty_password = false;
 bool skip_repeated_empty_password = false;
 bool pass_media_keys = false;
@@ -277,8 +279,7 @@ double bar_step = 15;
 double bar_base_height = 25;
 double bar_periodic_step = 15;
 double max_bar_height = 25;
-int bar_count = 0;
-int bar_width = 0;
+int bar_count = 10;
 int bar_orientation = BAR_FLAT;
 
 char bar_base_color[9] = "000000ff";
@@ -1433,6 +1434,9 @@ int main(int argc, char *argv[]) {
         {"raw", required_argument, NULL, 998},
         {"tiling", no_argument, NULL, 't'},
         {"centered", no_argument, NULL, 'C'},
+        {"fill", no_argument, NULL, 'F'},
+        {"scale", no_argument, NULL, 'L'},
+        {"max", no_argument, NULL, 'M'},
         {"ignore-empty-password", no_argument, NULL, 'e'},
         {"inactivity-timeout", required_argument, NULL, 'I'},
         {"show-failed-attempts", no_argument, NULL, 'f'},
@@ -1452,6 +1456,7 @@ int main(int argc, char *argv[]) {
         {"layout-color", required_argument, NULL, 309},
         {"time-color", required_argument, NULL, 310},
         {"date-color", required_argument, NULL, 311},
+        {"modif-color", required_argument, NULL, 322},
         {"keyhl-color", required_argument, NULL, 312},
         {"bshl-color", required_argument, NULL, 313},
         {"separator-color", required_argument, NULL, 314},
@@ -1464,6 +1469,7 @@ int main(int argc, char *argv[]) {
         {"timeoutline-color", required_argument, NULL, 319},
         {"dateoutline-color", required_argument, NULL, 320},
         {"greeteroutline-color", required_argument, NULL, 321},
+        {"modifoutline-color", required_argument, NULL, 323},
 
         {"line-uses-ring", no_argument, NULL, 'r'},
         {"line-uses-inside", no_argument, NULL, 's'},
@@ -1541,7 +1547,6 @@ int main(int argc, char *argv[]) {
         // bar indicator stuff
         {"bar-indicator", no_argument, NULL, 700},
         {"bar-direction", required_argument, NULL, 701},
-        {"bar-width", required_argument, NULL, 702},
         {"bar-orientation", required_argument, NULL, 703},
         {"bar-step", required_argument, NULL, 704},
         {"bar-max-height", required_argument, NULL, 705},
@@ -1571,7 +1576,7 @@ int main(int argc, char *argv[]) {
     if (getenv("WAYLAND_DISPLAY") != NULL)
         errx(EXIT_FAILURE, "i3lock is a program for X11 and does not work on Wayland. Try https://github.com/swaywm/swaylock instead");
 
-    char *optstring = "hvnbdc:p:ui:tCeI:frsS:kB:m";
+    char *optstring = "hvnbdc:p:ui:tCFLMeI:frsS:kB:m";
     char *arg = NULL;
     int opt = 0;
     char padded[9] = "ffffffff"; \
@@ -1620,16 +1625,34 @@ int main(int argc, char *argv[]) {
                 image_path = strdup(optarg);
                 break;
             case 't':
-                if(centered) {
-                    errx(EXIT_FAILURE, "i3lock-color: Options tiling and centered conflict.");
+                if(bg_type != NONE) {
+                    errx(EXIT_FAILURE, "i3lock-color: Only one background type can be used.");
                 }
-                tile = true;
+                bg_type = TILE;
                 break;
             case 'C':
-                if(tile) {
-                    errx(EXIT_FAILURE, "i3lock-color: Options tiling and centered conflict.");
+                if(bg_type != NONE) {
+                    errx(EXIT_FAILURE, "i3lock-color: Only one background type can be used.");
                 }
-                centered = true;
+                bg_type = CENTER;
+                break;
+            case 'F':
+                if(bg_type != NONE) {
+                    errx(EXIT_FAILURE, "i3lock-color: Only one background type can be used.");
+                }
+                bg_type = FILL;
+                break;
+            case 'L':
+                if(bg_type != NONE) {
+                    errx(EXIT_FAILURE, "i3lock-color: Only one background type can be used.");
+                }
+                bg_type = SCALE;
+                break;
+            case 'M':
+                if(bg_type != NONE) {
+                    errx(EXIT_FAILURE, "i3lock-color: Only one background type can be used.");
+                }
+                bg_type = MAX;
                 break;
             case 'p':
                 if (!strcmp(optarg, "win")) {
@@ -1739,6 +1762,12 @@ int main(int argc, char *argv[]) {
                 break;
             case  321:
                 parse_color(greeteroutlinecolor);
+                break;
+            case  322:
+                parse_color(modifcolor);
+                break;
+            case  323:
+                parse_color(modifoutlinecolor);
                 break;
 
 
@@ -2094,10 +2123,6 @@ int main(int argc, char *argv[]) {
                         break;
                 }
                 break;
-            case 702:
-                bar_width = atoi(optarg);
-                if (bar_width < 1) bar_width = 150;
-                break;
             case 703:
                 arg = optarg;
                 if (strcmp(arg, "vertical") == 0)
@@ -2292,27 +2317,7 @@ int main(int argc, char *argv[]) {
     last_resolution[1] = screen->height_in_pixels;
 
     if (bar_enabled) {
-        if (bar_count == 0) {
-            if (bar_width != 0) {
-                fprintf(stderr, "Warning: bar-width is deprecated, use bar-count instead\n");
-                int tmp = screen->width_in_pixels;
-                if (bar_orientation == BAR_VERT) tmp = screen->height_in_pixels;
-                bar_count = tmp / bar_width;
-                if (tmp % bar_width != 0) {
-                    ++bar_count;
-                }
-            } else {
-                bar_count = 10;
-            }
-        } else if (bar_width != 0) {
-            errx(EXIT_FAILURE, "bar-width and bar-count cannot be used at the same time");
-        }
-
-        if (bar_count >= MIN_BAR_COUNT && bar_count <= MAX_BAR_COUNT) {
-            bar_heights = (double*) calloc(bar_count, sizeof(double));
-        } else {
-            bar_enabled = false;
-        }
+        bar_heights = (double*) calloc(bar_count, sizeof(double));
     }
 
     xcb_change_window_attributes(conn, screen->root, XCB_CW_EVENT_MASK,
@@ -2332,27 +2337,20 @@ int main(int argc, char *argv[]) {
 
     free(image_raw_format);
 
-    xcb_pixmap_t* blur_pixmap = NULL;
     if (blur) {
-        blur_pixmap = malloc(sizeof(xcb_pixmap_t));
-        xcb_visualtype_t *vistype = get_root_visual_type(screen);
-        *blur_pixmap = capture_bg_pixmap(conn, screen, last_resolution);
-        cairo_surface_t *xcb_img = cairo_xcb_surface_create(conn, *blur_pixmap, vistype, last_resolution[0], last_resolution[1]);
+        xcb_pixmap_t bg_pixmap = capture_bg_pixmap(conn, screen, last_resolution);
+        cairo_surface_t *xcb_img = cairo_xcb_surface_create(conn, bg_pixmap, get_root_visual_type(screen), last_resolution[0], last_resolution[1]);
 
-        blur_img = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, last_resolution[0], last_resolution[1]);
-        cairo_t *ctx = cairo_create(blur_img);
+        blur_bg_img = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, last_resolution[0], last_resolution[1]);
+        cairo_t *ctx = cairo_create(blur_bg_img);
+
         cairo_set_source_surface(ctx, xcb_img, 0, 0);
         cairo_paint(ctx);
+        blur_image_surface(blur_bg_img, blur_sigma);
 
-        blur_image_surface(blur_img, blur_sigma);
-        if (img) {
-            // Display image centered on all outputs.
-            draw_image(last_resolution, ctx);
-            cairo_surface_destroy(img);
-            img = NULL;
-        }
         cairo_destroy(ctx);
         cairo_surface_destroy(xcb_img);
+        xcb_free_pixmap(conn, bg_pixmap);
     }
 
     xcb_window_t stolen_focus = find_focused_window(conn, screen->root);
@@ -2363,14 +2361,7 @@ int main(int argc, char *argv[]) {
     xcb_pixmap_t pixmap = create_bg_pixmap(conn, win, last_resolution, color);
     render_lock(last_resolution, pixmap);
     xcb_change_window_attributes(conn, win, XCB_CW_BACK_PIXMAP, (uint32_t[]){pixmap});
-
     xcb_free_pixmap(conn, pixmap);
-    if (blur_pixmap) {
-        xcb_free_pixmap(conn, *blur_pixmap);
-        free(blur_pixmap);
-        blur_pixmap = NULL;
-    }
-
 
     cursor = create_cursor(conn, screen, win, curs_choice);
 

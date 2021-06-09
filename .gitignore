@@ -4,6 +4,7 @@ tags
 *.swp
 *.gz
 *~
+x86_64-pc-linux-gnu
 
 ################################################################################
 # https://raw.githubusercontent.com/github/gitignore/master/Autotools.gitignore

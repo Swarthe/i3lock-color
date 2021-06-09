@@ -38,8 +38,17 @@ typedef struct {
     double bar_x, bar_y, bar_width;
 } DrawData;
 
+typedef enum {
+    NONE,
+    TILE,
+    CENTER,
+    FILL,
+    SCALE,
+    MAX,
+} background_type_t;
+
 void render_lock(uint32_t* resolution, xcb_drawable_t drawable);
-void draw_image(uint32_t* resolution, cairo_t* xcb_ctx);
+void draw_image(uint32_t* resolution, cairo_surface_t* img, cairo_t* xcb_ctx);
 void init_colors_once(void);
 void redraw_screen(void);
 void clear_indicator(void);

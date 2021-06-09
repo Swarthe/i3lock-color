@@ -62,17 +62,16 @@ extern char *modifier_string;
 
 /* A Cairo surface containing the specified image (-i), if any. */
 extern cairo_surface_t *img;
-extern cairo_surface_t *blur_img;
 extern cairo_surface_t *img_slideshow[256];
+extern cairo_surface_t *blur_bg_img;
 extern int slideshow_image_count;
 extern int slideshow_interval;
 extern bool slideshow_random_selection;
 
 unsigned long lastCheck;
 
-/* Whether the image should be tiled or centered. */
-extern bool centered;
-extern bool tile;
+/* How the background image should be displayed */
+extern background_type_t bg_type;
 /* The background color to use (in hex). */
 extern char color[9];
 /* indicator color options */
@@ -88,6 +87,7 @@ extern char wrongcolor[9];
 extern char layoutcolor[9];
 extern char timecolor[9];
 extern char datecolor[9];
+extern char modifcolor[9];
 extern char keyhlcolor[9];
 extern char bshlcolor[9];
 extern char separatorcolor[9];
@@ -100,6 +100,7 @@ extern char layoutoutlinecolor[9];
 extern char timeoutlinecolor[9];
 extern char dateoutlinecolor[9];
 extern char greeteroutlinecolor[9];
+extern char modifoutlinecolor[9];
 
 extern int screen_number;
 extern float refresh_rate;
@@ -202,6 +203,7 @@ rgba_t wrong16;
 rgba_t layout16;
 rgba_t time16;
 rgba_t date16;
+rgba_t modif16;
 rgba_t keyhl16;
 rgba_t bshl16;
 rgba_t sep16;
@@ -215,6 +217,7 @@ rgba_t layoutoutline16;
 rgba_t timeoutline16;
 rgba_t dateoutline16;
 rgba_t greeteroutline16;
+rgba_t modifoutline16;
 
 // experimental bar stuff
 
@@ -580,6 +583,7 @@ void init_colors_once(void) {
     colorgen(&tmp, layoutcolor, &layout16);
     colorgen(&tmp, timecolor, &time16);
     colorgen(&tmp, datecolor, &date16);
+    colorgen(&tmp, modifcolor, &modif16);
     colorgen(&tmp, keyhlcolor, &keyhl16);
     colorgen(&tmp, bshlcolor, &bshl16);
     colorgen(&tmp, separatorcolor, &sep16);
@@ -593,6 +597,7 @@ void init_colors_once(void) {
     colorgen(&tmp, timeoutlinecolor, &timeoutline16);
     colorgen(&tmp, dateoutlinecolor, &dateoutline16);
     colorgen(&tmp, greeteroutlinecolor, &greeteroutline16);
+    colorgen(&tmp, modifoutlinecolor, &modifoutline16);
 }
 
 static te_expr *compile_expression(const char *const from, const char *expression, const te_variable *variables, int var_count) {
@@ -693,17 +698,17 @@ void render_lock(uint32_t *resolution, xcb_drawable_t drawable) {
         }
     }
 
-    if (blur_img || img) {
-        if (blur_img) {
-            cairo_set_source_surface(xcb_ctx, blur_img, 0, 0);
-            cairo_paint(xcb_ctx);
-        } else {  // img can no longer be non-NULL if blur_img is not null
-            draw_image(resolution, xcb_ctx);
-        }
+    if (blur_bg_img) {
+        cairo_set_source_surface(xcb_ctx, blur_bg_img, 0, 0);
+        cairo_paint(xcb_ctx);
     } else {
         cairo_set_source_rgba(xcb_ctx, background.red, background.green, background.blue, background.alpha);
         cairo_rectangle(xcb_ctx, 0, 0, resolution[0], resolution[1]);
         cairo_fill(xcb_ctx);
+    }
+
+    if (img) {
+        draw_image(resolution, img, xcb_ctx);
     }
 
     /*
@@ -797,8 +802,8 @@ void render_lock(uint32_t *resolution, xcb_drawable_t drawable) {
         draw_data.mod_text.outline_width = modifieroutlinewidth;
         draw_data.mod_text.font = get_font_face(WRONG_FONT);
         draw_data.mod_text.align = modif_align;
-        draw_data.mod_text.color = wrong16;
-        draw_data.mod_text.outline_color = wrongoutline16;
+        draw_data.mod_text.color = modif16;
+        draw_data.mod_text.outline_color = modifoutline16;
     }
 
     if (layout_text) {
@@ -870,7 +875,7 @@ void render_lock(uint32_t *resolution, xcb_drawable_t drawable) {
           scaling_factor, button_diameter_physical);
 
     // variable mapping for evaluating the clock position expression
-    const unsigned int vars_size = 11;
+    const unsigned int vars_size = 14;
     te_variable vars[] =
         {{"w", &width},
          {"h", &height},
@@ -1100,58 +1105,62 @@ void render_lock(uint32_t *resolution, xcb_drawable_t drawable) {
 
 /**
  * Draws the configured image on the provided context. The image is drawn centered on all monitors, tiled, or just
- * painted starting from 0,0.
+ * painted starting from 0,0. It is also scaled if bg_type is FILL, MAX, or SCALE.
  */
-void draw_image(uint32_t* resolution, cairo_t* xcb_ctx) {
-    if (centered) {
-        double image_width = cairo_image_surface_get_width(img);
-        double image_height = cairo_image_surface_get_height(img);
+void draw_image(uint32_t* root_resolution, cairo_surface_t *img, cairo_t* xcb_ctx) {
 
-        xcb_randr_get_screen_resources_current_reply_t *reply = xcb_randr_get_screen_resources_current_reply(
-                conn, xcb_randr_get_screen_resources_current(conn, screen->root), NULL);
-
-        xcb_timestamp_t timestamp = reply->config_timestamp;
-        int len = xcb_randr_get_screen_resources_current_outputs_length(reply);
-        xcb_randr_output_t *randr_outputs = xcb_randr_get_screen_resources_current_outputs(reply);
-
-        // For every output
-        for (int i = 0; i < len; i++) {
-            xcb_randr_get_output_info_reply_t *output = xcb_randr_get_output_info_reply(
-                    conn, xcb_randr_get_output_info(conn, randr_outputs[i], timestamp), NULL);
-            if (output == NULL)
-                continue;
-
-            if (output->crtc == XCB_NONE || output->connection == XCB_RANDR_CONNECTION_DISCONNECTED)
-                continue;
-
-            xcb_randr_get_crtc_info_cookie_t infoCookie = xcb_randr_get_crtc_info(conn, output->crtc,
-                                                                                  timestamp);
-            xcb_randr_get_crtc_info_reply_t *crtc = xcb_randr_get_crtc_info_reply(conn, infoCookie, NULL);
-
-            // Paint around center of monitor
-            double origin_x = crtc->x + (crtc->width / 2.0 - image_width / 2.0);
-            double origin_y = crtc->y + (crtc->height / 2.0 - image_height / 2.0);
-
-            cairo_set_source_surface(xcb_ctx, img, origin_x, origin_y);
-            cairo_paint(xcb_ctx);
-
-            free(crtc);
-            free(output);
-        }
-    }  else if (tile) {
-        /* create a pattern and fill a rectangle as big as the screen */
-        cairo_pattern_t *pattern;
-        pattern = cairo_pattern_create_for_surface(img);
-        cairo_set_source(xcb_ctx, pattern);
-        cairo_pattern_set_extend(pattern, CAIRO_EXTEND_REPEAT);
-        cairo_rectangle(xcb_ctx, 0, 0, resolution[0], resolution[1]);
-        cairo_fill(xcb_ctx);
-        cairo_pattern_destroy(pattern);
-    } else {
+    if (bg_type == NONE) {
+        // Don't do any image manipulation
         cairo_set_source_surface(xcb_ctx, img, 0, 0);
         cairo_paint(xcb_ctx);
+        return;
     }
 
+    cairo_pattern_t *pattern = cairo_pattern_create_for_surface(img);
+    cairo_pattern_set_extend(pattern, bg_type == TILE ? CAIRO_EXTEND_REPEAT : CAIRO_EXTEND_NONE);
+    cairo_set_source(xcb_ctx, pattern);
+
+    double image_width = cairo_image_surface_get_width(img);
+    double image_height = cairo_image_surface_get_height(img);
+
+    for (int i = 0; i < xr_screens; i++) {
+        // Find out scaling factors using bg_type and aspect ratios
+        double scale_x = 1, scale_y = 1;
+        if (bg_type == SCALE) {
+            scale_x = xr_resolutions[i].width / image_width;
+            scale_y = xr_resolutions[i].height / image_height;
+
+        } else if (bg_type == MAX || bg_type == FILL) {
+            double aspect_diff = (double) xr_resolutions[i].height / xr_resolutions[i].width - image_height / image_width;
+            if((bg_type == MAX && aspect_diff > 0) || (bg_type == FILL && aspect_diff < 0)) {
+                scale_x = scale_y = xr_resolutions[i].width / image_width;
+            } else if ((bg_type == MAX && aspect_diff < 0) || (bg_type == FILL && aspect_diff > 0)) {
+                scale_x = scale_y = xr_resolutions[i].height / image_height;
+            }
+        }
+
+        // Scale and translate the pattern
+        cairo_matrix_t matrix;
+        cairo_matrix_init_scale(&matrix, 1/scale_x, 1/scale_y);
+
+        if (bg_type == TILE) {
+            // Start image from top-left corner
+            cairo_matrix_translate(&matrix, -xr_resolutions[i].x, -xr_resolutions[i].y);
+        } else {
+            // Draw image in the center of the screen
+            cairo_matrix_translate(&matrix,
+                (image_width  * scale_x - xr_resolutions[i].width ) / 2 - xr_resolutions[i].x,
+                (image_height * scale_y - xr_resolutions[i].height) / 2 - xr_resolutions[i].y);
+        }
+
+        cairo_pattern_set_matrix(pattern, &matrix);
+
+        // Draw to screen
+        cairo_rectangle(xcb_ctx, xr_resolutions[i].x, xr_resolutions[i].y, xr_resolutions[i].width, xr_resolutions[i].height);
+        cairo_fill(xcb_ctx);
+    }
+
+    cairo_pattern_destroy(pattern);
 }
 
 /*
